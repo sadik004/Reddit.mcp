@@ -19,7 +19,7 @@ class RedditConfig(BaseSettings):
     )
 
     storage_state: Path = Field(
-        default=Path("storage_state.json"),
+        default_factory=lambda: Path(__file__).resolve().parent.parent.parent / "storage_state.json",
         description="Path to Playwright storage_state.json containing auth cookies"
     )
     headless: bool = Field(

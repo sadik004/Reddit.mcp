@@ -266,8 +266,14 @@ class RedditAutomationClient:
             if payload.is_nsfw is not None:
                 nsfw_switch = page.locator(RedditLocators.PROFILE_NSFW_SWITCH).first
                 if await nsfw_switch.count() > 0:
-                    await nsfw_switch.click()
-                    updated.append("is_nsfw")
+                    aria_checked = await nsfw_switch.get_attribute("aria-checked")
+                    if aria_checked is not None:
+                        is_checked = aria_checked.lower() == "true"
+                    else:
+                        is_checked = await nsfw_switch.is_checked()
+                    if is_checked != payload.is_nsfw:
+                        await nsfw_switch.click()
+                        updated.append("is_nsfw")
 
             # Blur fields to trigger modern Reddit auto-save
             await page.keyboard.press("Tab")
@@ -575,8 +581,13 @@ class RedditAutomationClient:
                 await page.goto(f"https://www.reddit.com/comments/{clean_id}/", wait_until="domcontentloaded")
 
             if is_comment:
-                clean_cid = re.sub(r"^t1_", "", target_id_or_url)
-                comment_elem = page.locator(f'shreddit-comment[thingid*="{clean_cid}"], shreddit-comment[id*="{clean_cid}"]').first
+                if target_id_or_url.startswith("http"):
+                    match = re.search(r"/(?:comment|comments/[^/]+/_)/([a-z0-9]+)", target_id_or_url, re.IGNORECASE)
+                    clean_cid = match.group(1) if match else ""
+                else:
+                    clean_cid = re.sub(r"^t1_", "", target_id_or_url)
+                selector = f'shreddit-comment[thingid*="{clean_cid}"], shreddit-comment[id*="{clean_cid}"]' if clean_cid else "shreddit-comment"
+                comment_elem = page.locator(selector).first
                 container = comment_elem if await comment_elem.count() > 0 else page
                 if direction == 1:
                     btn = container.locator(RedditLocators.COMMENT_UPVOTE_BUTTON).first
@@ -620,20 +631,55 @@ class RedditAutomationClient:
             )
 
         async with self.pool.get_page() as page:
-            clean_target = re.sub(r"^t[13]_", "", target_id_or_url)
-            url = target_id_or_url if target_id_or_url.startswith("http") else f"https://www.reddit.com/comments/{clean_target}/"
-            await page.goto(url, wait_until="domcontentloaded")
+            is_comment = target_id_or_url.startswith("t1_") or ("/comment/" in target_id_or_url) or ("/comments/" in target_id_or_url and "/_/" in target_id_or_url)
+
+            if target_id_or_url.startswith("http"):
+                await page.goto(target_id_or_url, wait_until="domcontentloaded")
+            elif target_id_or_url.startswith("t1_"):
+                clean_comment_id = target_id_or_url.replace("t1_", "")
+                navigated = False
+                try:
+                    resp = await page.request.get(f"https://www.reddit.com/api/info.json?id={target_id_or_url}")
+                    if resp.status == 200:
+                        info_data = await resp.json()
+                        children = info_data.get("data", {}).get("children", [])
+                        if children:
+                            permalink = children[0].get("data", {}).get("permalink")
+                            if permalink:
+                                await page.goto(f"https://www.reddit.com{permalink}", wait_until="domcontentloaded")
+                                navigated = True
+                except Exception:
+                    pass
+                if not navigated:
+                    await page.goto(f"https://www.reddit.com/comments/any/_/{clean_comment_id}/", wait_until="domcontentloaded")
+            else:
+                clean_target = re.sub(r"^t3_", "", target_id_or_url)
+                await page.goto(f"https://www.reddit.com/comments/{clean_target}/", wait_until="domcontentloaded")
 
             action_name = "unsave" if unsave else "save"
             selector = RedditLocators.UNSAVE_BUTTON if unsave else RedditLocators.SAVE_BUTTON
 
-            btn = page.locator(selector).first
+            if is_comment:
+                if target_id_or_url.startswith("http"):
+                    match = re.search(r"/(?:comment|comments/[^/]+/_)/([a-z0-9]+)", target_id_or_url, re.IGNORECASE)
+                    clean_cid = match.group(1) if match else ""
+                else:
+                    clean_cid = re.sub(r"^t1_", "", target_id_or_url)
+                selector_comm = f'shreddit-comment[thingid*="{clean_cid}"], shreddit-comment[id*="{clean_cid}"]' if clean_cid else "shreddit-comment"
+                comment_elem = page.locator(selector_comm).first
+                container = comment_elem if await comment_elem.count() > 0 else page
+            else:
+                post_elem = page.locator("shreddit-post").first
+                container = post_elem if await post_elem.count() > 0 else page
+
+            btn = container.locator(selector).first
             # If button is not directly visible, open Shreddit overflow menu first
             if await btn.count() == 0 or not await btn.is_visible():
-                overflow = page.locator(RedditLocators.POST_OVERFLOW_MENU).first
+                overflow = container.locator(RedditLocators.POST_OVERFLOW_MENU).first
                 if await overflow.count() > 0 and await overflow.is_visible():
                     await overflow.click()
                     await asyncio.sleep(0.4)
+                    btn = page.locator(selector).first
 
             await btn.wait_for(state="visible", timeout=6000)
             box = await btn.bounding_box()
@@ -1062,11 +1108,12 @@ class RedditAutomationClient:
         self,
         subreddits: Optional[List[str]] = None,
         keywords: Optional[List[str]] = None,
-        min_urgency: int = 5
+        min_urgency: Optional[int] = 5
     ) -> List[RedditLeadDTO]:
         """Discovers high-intent technical hurdles and client acquisition opportunities."""
         target_subs = subreddits or ["webscraping", "Python", "freelance", "datascience"]
         search_terms = keywords or ["scraping blocked", "cloudflare 403", "playwright turnstile", "hire scraper"]
+        urgency_threshold = min_urgency if min_urgency is not None else 5
 
         leads: List[RedditLeadDTO] = []
 
@@ -1089,7 +1136,7 @@ class RedditAutomationClient:
                         urgency += 2
                         pain_points.append("Commercial hiring or outsourcing intent")
 
-                    if urgency >= min_urgency:
+                    if urgency >= urgency_threshold:
                         leads.append(
                             RedditLeadDTO(
                                 post_id=item.post_id,

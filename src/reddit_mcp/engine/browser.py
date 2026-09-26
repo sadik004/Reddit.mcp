@@ -55,8 +55,6 @@ class BrowserPoolManager:
             "--hide-scrollbars",
             "--mute-audio",
         ]
-        if self.config.proxy_server:
-            launch_args.append(f"--proxy-server={self.config.proxy_server}")
 
         self._bp_config = BPBrowserConfig(
             headless=self.config.headless,
@@ -98,6 +96,15 @@ class BrowserPoolManager:
             "timezone_id": "America/New_York",
             "color_scheme": "dark",
         }
+
+        # Configure proxy with credentials if specified
+        if self.config.proxy_server:
+            proxy_dict: dict = {"server": self.config.proxy_server}
+            if self.config.proxy_username:
+                proxy_dict["username"] = self.config.proxy_username
+            if self.config.proxy_password:
+                proxy_dict["password"] = self.config.proxy_password
+            context_kwargs["proxy"] = proxy_dict
 
         # Load authenticated session if available
         storage_path = Path(self.config.storage_state) if self.config.storage_state else None

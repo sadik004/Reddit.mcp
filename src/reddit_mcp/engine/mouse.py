@@ -4,6 +4,7 @@ Powered directly by behavioral_playwright's BiomechanicalTremorEngine and MouseC
 """
 
 from __future__ import annotations
+import asyncio
 import random
 from typing import List, Tuple, Optional, Any
 from playwright.async_api import Page
@@ -62,13 +63,23 @@ class MouseController:
             random.uniform(100.0, 300.0)
         )
         
+        engine = cls._get_engine()
         bp_mouse = BPMouseController(
             page=page,
-            biomechanics=cls._get_engine(),
+            biomechanics=engine,
             initial_pos=start_pos
         )
         
-        # Perform humanized movement and click
-        await bp_mouse.click(selector_or_x=target_x, y=target_y, humanize=True)
-        cls._last_position = (bp_mouse.current_x, bp_mouse.current_y)
+        # Biomechanical click micro-slip and humanized ballistic movement
+        mousedown_pos, mouseup_pos, dwell_time = engine.simulate_click_micro_slip((float(target_x), float(target_y)))
+        await bp_mouse.move(mousedown_pos[0], mousedown_pos[1], humanize=True)
+        if hasattr(page, "mouse") and hasattr(page.mouse, "down") and hasattr(page.mouse, "up"):
+            await page.mouse.down(button=button)
+            await asyncio.sleep(dwell_time)
+            if hasattr(page.mouse, "move"):
+                await page.mouse.move(mouseup_pos[0], mouseup_pos[1])
+            await page.mouse.up(button=button)
+        elif hasattr(page, "mouse") and hasattr(page.mouse, "click"):
+            await page.mouse.click(mousedown_pos[0], mousedown_pos[1], button=button)
+        cls._last_position = (mouseup_pos[0], mouseup_pos[1])
 
