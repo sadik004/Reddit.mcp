@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator, Optional
 from playwright.async_api import (
     async_playwright,
@@ -130,9 +131,10 @@ class BrowserPoolManager:
         }
 
         # Load authenticated session if available
-        if self.config.storage_state and self.config.storage_state.exists():
-            context_kwargs["storage_state"] = str(self.config.storage_state)
-            logger.info(f"Loaded storage_state from {self.config.storage_state}")
+        storage_path = Path(self.config.storage_state) if self.config.storage_state else None
+        if storage_path and storage_path.exists():
+            context_kwargs["storage_state"] = str(storage_path)
+            logger.info(f"Loaded storage_state from {storage_path}")
 
         context: BrowserContext = await browser.new_context(**context_kwargs)
         self._active_contexts += 1

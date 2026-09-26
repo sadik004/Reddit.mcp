@@ -143,7 +143,14 @@ class RedditAutomationClient:
 
     async def get_profile(self, username: Optional[str] = None) -> RedditProfileDTO:
         """Extracts complete profile data for a given user or current authenticated user."""
-        target_user = username if username and username != "me" else None
+        target_user = None
+        if username and username.strip().lower() not in ("me", "u/me"):
+            target_user = re.sub(r"[^\w-]", "", username.replace("u/", "").strip())
+
+        cache_key = f"profile:{target_user or 'me'}"
+        cached = self._get_from_cache(cache_key)
+        if cached is not None:
+            return cached
 
         async with self.pool.get_page() as page:
             if not target_user:
@@ -159,20 +166,27 @@ class RedditAutomationClient:
                 if await about_input.count() > 0:
                     bio = await about_input.input_value()
 
-                return RedditProfileDTO(
+                profile_dto = RedditProfileDTO(
                     username="me",
                     display_name=display_name,
                     bio=bio,
                     social_links=[]
                 )
+                self._set_cache(cache_key, profile_dto, ttl_seconds=60.0)
+                return profile_dto
 
             # Query public user profile
             profile_url = f"https://www.reddit.com/user/{target_user}/about.json"
             response = await page.request.get(profile_url)
+            if response.status in (429, 503):
+                logger.warning(f"Reddit profile query throttled ({response.status}). Retrying with backoff...")
+                await asyncio.sleep(2.0 + random.uniform(0.5, 1.5))
+                response = await page.request.get(profile_url)
+
             if response.status == 200:
                 data = await response.json()
                 user_data = data.get("data", {})
-                return RedditProfileDTO(
+                profile_dto = RedditProfileDTO(
                     username=user_data.get("name", target_user),
                     display_name=user_data.get("subreddit", {}).get("title"),
                     bio=user_data.get("subreddit", {}).get("public_description"),
@@ -182,15 +196,19 @@ class RedditAutomationClient:
                     avatar_url=user_data.get("icon_img"),
                     is_nsfw=user_data.get("subreddit", {}).get("over_18", False)
                 )
+                self._set_cache(cache_key, profile_dto, ttl_seconds=60.0)
+                return profile_dto
 
             # Fallback to HTML DOM parsing
             await page.goto(f"https://www.reddit.com/user/{target_user}/", wait_until="domcontentloaded")
             h1 = page.locator("h1").first
             name = (await h1.inner_text()).strip() if await h1.count() > 0 else target_user
-            return RedditProfileDTO(
+            profile_dto = RedditProfileDTO(
                 username=target_user,
                 display_name=name
             )
+            self._set_cache(cache_key, profile_dto, ttl_seconds=60.0)
+            return profile_dto
 
     async def update_profile(self, payload: RedditProfileUpdateDTO) -> RedditProfileUpdateResultDTO:
         """Updates profile settings with human-mimetic input dynamics."""
@@ -778,13 +796,14 @@ class RedditAutomationClient:
         async with self.pool.get_page() as page:
             await page.goto("https://www.reddit.com/message/compose/", wait_until="domcontentloaded")
 
+            recipient_clean = re.sub(r"[^\w-]", "", payload.recipient.replace("u/", "").strip())
             rec_input = page.locator(RedditLocators.MESSAGE_RECIPIENT_INPUT).first
             subj_input = page.locator(RedditLocators.MESSAGE_SUBJECT_INPUT).first
             body_input = page.locator(RedditLocators.MESSAGE_BODY_TEXTAREA).first
             send_btn = page.locator(RedditLocators.MESSAGE_SEND_BUTTON).first
 
             await rec_input.wait_for(state="visible", timeout=6000)
-            await rec_input.fill(payload.recipient)
+            await rec_input.fill(recipient_clean)
 
             await subj_input.wait_for(state="visible", timeout=4000)
             await KeyboardController.human_type(subj_input, payload.subject)
@@ -801,15 +820,24 @@ class RedditAutomationClient:
             return RedditActionResultDTO(
                 success=True,
                 action="send_message",
-                target_id=payload.recipient,
-                message=f"Private message successfully sent to u/{payload.recipient}."
+                target_id=recipient_clean,
+                message=f"Private message successfully sent to u/{recipient_clean}."
             )
 
     async def check_inbox(self, limit: int = 15) -> List[RedditInboxItemDTO]:
         """Reads recent inbox messages and notifications."""
+        if not (self.config.storage_state and self.config.storage_state.exists()):
+            logger.warning("check_inbox called without active authenticated storage_state.")
+            return []
+
         async with self.pool.get_page() as page:
             json_url = f"https://www.reddit.com/message/inbox.json?limit={limit}"
             response = await page.request.get(json_url)
+            if response.status in (429, 503):
+                logger.warning(f"Reddit check_inbox throttled (HTTP {response.status}). Retrying with backoff...")
+                await asyncio.sleep(2.0 + random.uniform(0.5, 1.5))
+                response = await page.request.get(json_url)
+
             items: List[RedditInboxItemDTO] = []
             if response.status == 200:
                 data = await response.json()
