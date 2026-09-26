@@ -312,6 +312,10 @@ class RedditAutomationClient:
         target_clean = payload.target.strip().lower()
         if target_clean in ("u/me", "me", "profile"):
             submit_url = "https://www.reddit.com/user/me/submit"
+        elif target_clean.startswith("u/"):
+            submit_url = f"https://www.reddit.com/user/{target_clean[2:]}/submit"
+        elif target_clean.startswith("user/"):
+            submit_url = f"https://www.reddit.com/{target_clean}/submit"
         elif target_clean.startswith("r/"):
             submit_url = f"https://www.reddit.com/{target_clean}/submit"
         else:
@@ -531,7 +535,20 @@ class RedditAutomationClient:
             else:
                 await submit_btn.click()
 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(1.2)
+
+            # Check for error toast or alert banner (e.g. locked thread, rate limit, deleted post)
+            error_elem = page.locator("[role='alert'], shreddit-alert, [data-testid='toast-error']").first
+            if await error_elem.count() > 0 and await error_elem.is_visible():
+                err_text = (await error_elem.inner_text()).strip()
+                return RedditCommentResultDTO(
+                    success=False,
+                    post_id=payload.post_id_or_url,
+                    permalink=target_url,
+                    body=payload.body,
+                    message=f"Reddit comment error: {err_text}"
+                )
+
             return RedditCommentResultDTO(
                 success=True,
                 post_id=payload.post_id_or_url,

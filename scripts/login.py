@@ -16,8 +16,12 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 
-async def export_reddit_session(output_path: str = "storage_state.json") -> None:
+DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "storage_state.json"
+
+
+async def export_reddit_session(output_path: str | Path | None = None) -> None:
     """Launches interactive browser for manual login and exports session state."""
+    target = Path(output_path) if output_path else DEFAULT_STORAGE_PATH
     print("=" * 70)
     print(" 🛡️  Reddit MCP - Interactive Session Exporter")
     print("=" * 70)
@@ -70,7 +74,6 @@ async def export_reddit_session(output_path: str = "storage_state.json") -> None
         print("\n⏳ Complete login in the browser, then press [ENTER] here to save session...")
         await loop.run_in_executor(None, sys.stdin.readline)
 
-        target = Path(output_path)
         await context.storage_state(path=str(target))
         print(f"\n✅ Session successfully exported to: {target.resolve()}")
         print("You can now run Reddit MCP in headless mode with full authentication!")
@@ -79,5 +82,6 @@ async def export_reddit_session(output_path: str = "storage_state.json") -> None
 
 
 if __name__ == "__main__":
-    out_file = sys.argv[1] if len(sys.argv) > 1 else "storage_state.json"
+    default_output = Path(__file__).resolve().parent.parent / "storage_state.json"
+    out_file = sys.argv[1] if len(sys.argv) > 1 else str(default_output)
     asyncio.run(export_reddit_session(out_file))

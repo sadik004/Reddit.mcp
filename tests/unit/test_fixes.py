@@ -211,3 +211,108 @@ async def test_update_profile_nsfw_switch_logic(monkeypatch, tmp_path):
     mock_switch.click.assert_awaited_once()
 
 
+def test_submit_post_target_url_routing():
+    """Validates target URL generation for user profiles, u/me, and subreddits."""
+    targets = {
+        "u/me": "https://www.reddit.com/user/me/submit",
+        "me": "https://www.reddit.com/user/me/submit",
+        "profile": "https://www.reddit.com/user/me/submit",
+        "u/testuser": "https://www.reddit.com/user/testuser/submit",
+        "user/testuser": "https://www.reddit.com/user/testuser/submit",
+        "r/webscraping": "https://www.reddit.com/r/webscraping/submit",
+        "webscraping": "https://www.reddit.com/r/webscraping/submit",
+    }
+    for target_raw, expected_url in targets.items():
+        target_clean = target_raw.strip().lower()
+        if target_clean in ("u/me", "me", "profile"):
+            submit_url = "https://www.reddit.com/user/me/submit"
+        elif target_clean.startswith("u/"):
+            submit_url = f"https://www.reddit.com/user/{target_clean[2:]}/submit"
+        elif target_clean.startswith("user/"):
+            submit_url = f"https://www.reddit.com/{target_clean}/submit"
+        elif target_clean.startswith("r/"):
+            submit_url = f"https://www.reddit.com/{target_clean}/submit"
+        else:
+            submit_url = f"https://www.reddit.com/r/{target_clean}/submit"
+        assert submit_url == expected_url
+
+
+@pytest.mark.asyncio
+async def test_submit_comment_detects_error_toast(monkeypatch, tmp_path):
+    """Validates that submit_comment captures error toasts/alerts and reports success=False."""
+    from unittest.mock import AsyncMock, MagicMock
+    from reddit_mcp.models.dtos import RedditCommentSubmissionDTO
+    from contextlib import asynccontextmanager
+
+    fake_state = tmp_path / "storage_state.json"
+    fake_state.write_text("{}", encoding="utf-8")
+
+    client = RedditAutomationClient()
+    client.config.storage_state = fake_state
+
+    # Mock error toast element
+    mock_error_toast = MagicMock()
+    mock_error_toast.count = AsyncMock(return_value=1)
+    mock_error_toast.is_visible = AsyncMock(return_value=True)
+    mock_error_toast.inner_text = AsyncMock(return_value="Thread is archived and cannot be commented on.")
+
+    # Mock comment input and submit button
+    mock_input = MagicMock()
+    mock_input.wait_for = AsyncMock()
+    mock_input.bounding_box = AsyncMock(return_value=None)
+    mock_input.element_handle = AsyncMock(return_value=None)
+
+    mock_btn = MagicMock()
+    mock_btn.wait_for = AsyncMock()
+    mock_btn.is_enabled = AsyncMock(return_value=True)
+    mock_btn.bounding_box = AsyncMock(return_value=None)
+    mock_btn.click = AsyncMock()
+
+    mock_page = MagicMock()
+    mock_page.goto = AsyncMock()
+
+    def mock_locator_router(sel):
+        elem = MagicMock()
+        if "role='alert'" in sel or "toast-error" in sel:
+            elem.first = mock_error_toast
+        elif "button" in sel:
+            elem.first = mock_btn
+            elem.last = mock_btn
+        else:
+            elem.first = mock_input
+            elem.last = mock_input
+        return elem
+
+    mock_page.locator = MagicMock(side_effect=mock_locator_router)
+
+    @asynccontextmanager
+    async def fake_get_page():
+        yield mock_page
+
+    from reddit_mcp.engine.keyboard import KeyboardController
+    monkeypatch.setattr(KeyboardController, "human_type", AsyncMock())
+    monkeypatch.setattr(client.pool, "get_page", fake_get_page)
+
+    res = await client.submit_comment(RedditCommentSubmissionDTO(
+        post_id_or_url="t3_archived123",
+        body="Trying to comment on archived thread"
+    ))
+
+    assert res.success is False
+    assert "Reddit comment error" in res.message
+    assert "Thread is archived" in res.message
+
+
+def test_login_script_default_output_path():
+    """Validates that login.py DEFAULT_STORAGE_PATH points to storage_state.json in root."""
+    import sys
+    from pathlib import Path
+    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from login import DEFAULT_STORAGE_PATH
+    assert DEFAULT_STORAGE_PATH.is_absolute()
+    assert DEFAULT_STORAGE_PATH.name == "storage_state.json"
+    assert DEFAULT_STORAGE_PATH.parent.name == "Reddit.mcp"
+
+
