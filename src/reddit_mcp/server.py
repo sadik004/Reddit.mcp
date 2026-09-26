@@ -125,36 +125,40 @@ class RedditMcpServer:
         }
 
     async def run_stdio(self) -> None:
-        """Runs the MCP server over standard input and output streams."""
+        """Runs the MCP server over standard input and output streams with guaranteed cleanup."""
         loop = asyncio.get_running_loop()
 
-        while True:
-            # Thread-pool executor reading avoids Windows ProactorEventLoop pipe deadlocks
-            line = await loop.run_in_executor(None, sys.stdin.readline)
-            if not line:
-                break
+        try:
+            while True:
+                # Thread-pool executor reading avoids Windows ProactorEventLoop pipe deadlocks
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+                if not line:
+                    break
 
-            line_str = line.strip()
-            if not line_str:
-                continue
+                line_str = line.strip()
+                if not line_str:
+                    continue
 
-            try:
-                request = json.loads(line_str)
-                response = await self.handle_request(request)
-                if response is not None:
-                    response_json = json.dumps(response)
-                    sys.stdout.write(response_json + "\n")
-                    sys.stdout.flush()
-            except json.JSONDecodeError as exc:
-                err_resp = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {
-                        "code": -32700,
-                        "message": f"Invalid JSON received: {exc}"
+                try:
+                    request = json.loads(line_str)
+                    response = await self.handle_request(request)
+                    if response is not None:
+                        response_json = json.dumps(response)
+                        sys.stdout.write(response_json + "\n")
+                        sys.stdout.flush()
+                except json.JSONDecodeError as exc:
+                    err_resp = {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": -32700,
+                            "message": f"Invalid JSON received: {exc}"
+                        }
                     }
-                }
-                sys.stdout.write(json.dumps(err_resp) + "\n")
-                sys.stdout.flush()
-            except Exception as exc:
-                logger.exception("Unexpected server runtime error")
+                    sys.stdout.write(json.dumps(err_resp) + "\n")
+                    sys.stdout.flush()
+                except Exception as exc:
+                    logger.exception("Unexpected server runtime error")
+        finally:
+            logger.info("Shutting down Reddit MCP server and cleaning up browser pool...")
+            await self.client.pool.close()

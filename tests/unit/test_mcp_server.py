@@ -83,3 +83,28 @@ async def test_mcp_pitch_generator_tool_call() -> None:
     content = resp["result"]["content"][0]["text"]
     assert "behavioral-playwright" in content
     assert "target_client" in content
+
+
+@pytest.mark.asyncio
+async def test_mcp_unauthenticated_write_fast_fail() -> None:
+    # Point to a guaranteed non-existent storage state
+    config = RedditConfig(storage_state="non_existent_file.json")
+    server = RedditMcpServer(config)
+    req = {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "reddit_submit_post",
+            "arguments": {
+                "target": "r/test",
+                "title": "Automated Test Post",
+                "body": "Test Body Content"
+            }
+        }
+    }
+    resp = await server.handle_request(req)
+    assert resp is not None
+    assert "error" not in resp
+    content = resp["result"]["content"][0]["text"]
+    assert "Authentication required" in content

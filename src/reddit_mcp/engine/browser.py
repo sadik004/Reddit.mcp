@@ -33,6 +33,7 @@ class BrowserPoolManager:
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self._active_contexts: int = 0
+        self._browser_lock = asyncio.Lock()
 
     @classmethod
     async def get_instance(cls, config: Optional[RedditConfig] = None) -> BrowserPoolManager:
@@ -44,8 +45,14 @@ class BrowserPoolManager:
         return cls._instance
 
     async def _ensure_browser(self) -> Browser:
-        """Launches the shared browser instance if not already running."""
-        if self._browser is None or not self._browser.is_connected():
+        """Launches the shared browser instance if not already running, guarded by mutex."""
+        if self._browser is not None and self._browser.is_connected():
+            return self._browser
+
+        async with self._browser_lock:
+            if self._browser is not None and self._browser.is_connected():
+                return self._browser
+
             if self._playwright is None:
                 self._playwright = await async_playwright().start()
 

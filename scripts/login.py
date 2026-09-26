@@ -55,6 +55,29 @@ async def export_reddit_session(output_path: str = "storage_state.json") -> None
             viewport={"width": 1280, "height": 800}
         )
 
+        # Anti-detection stealth scripts
+        await context.add_init_script("""
+            // Mask webdriver flag
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+
+            // Spoof plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+
+            // Spoof languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+
+            // Spoof Chrome runtime object
+            window.chrome = {
+                runtime: {}
+            };
+        """)
+
         page = await context.new_page()
         print("Navigating to https://www.reddit.com/login ...")
         await page.goto("https://www.reddit.com/login")

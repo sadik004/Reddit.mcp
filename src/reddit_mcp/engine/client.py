@@ -11,10 +11,13 @@ Executes standard and advanced human workflows on Reddit:
 """
 
 from __future__ import annotations
+import asyncio
 import json
 import logging
+import random
 import re
-from typing import List, Optional, Dict, Any
+import time
+from typing import List, Optional, Dict, Any, Tuple
 from urllib.parse import quote_plus, urljoin
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
@@ -56,6 +59,20 @@ class RedditAutomationClient:
     def __init__(self, config: Optional[RedditConfig] = None):
         self.config = config or RedditConfig()
         self.pool = BrowserPoolManager(self.config)
+        self._cache: Dict[str, Tuple[float, Any]] = {}
+
+    def _get_from_cache(self, key: str) -> Optional[Any]:
+        """Retrieves non-expired entry from in-memory TTL cache."""
+        if key in self._cache:
+            expires_at, val = self._cache[key]
+            if time.time() < expires_at:
+                return val
+            del self._cache[key]
+        return None
+
+    def _set_cache(self, key: str, val: Any, ttl_seconds: float = 60.0) -> None:
+        """Stores entry in in-memory TTL cache."""
+        self._cache[key] = (time.time() + ttl_seconds, val)
 
     # =========================================================================
     # 1. Authentication & Session Auditing
@@ -177,6 +194,13 @@ class RedditAutomationClient:
 
     async def update_profile(self, payload: RedditProfileUpdateDTO) -> RedditProfileUpdateResultDTO:
         """Updates profile settings with human-mimetic input dynamics."""
+        if not (self.config.storage_state and self.config.storage_state.exists()):
+            return RedditProfileUpdateResultDTO(
+                success=False,
+                updated_fields=[],
+                message="Authentication required: No storage_state.json found. Please authenticate using scripts/login.py first."
+            )
+
         async with self.pool.get_page() as page:
             await page.goto("https://www.reddit.com/settings/profile", wait_until="domcontentloaded")
             updated: List[str] = []
@@ -231,6 +255,14 @@ class RedditAutomationClient:
 
     async def submit_post(self, payload: RedditPostSubmissionDTO) -> RedditPostResultDTO:
         """Publishes a text or link post to a subreddit or own profile."""
+        if not (self.config.storage_state and self.config.storage_state.exists()):
+            return RedditPostResultDTO(
+                success=False,
+                title=payload.title,
+                target=payload.target,
+                message="Authentication required: No storage_state.json found. Please authenticate using scripts/login.py first."
+            )
+
         target_clean = payload.target.strip().lower()
         if target_clean in ("u/me", "me", "profile"):
             submit_url = "https://www.reddit.com/user/me/submit"
@@ -271,30 +303,56 @@ class RedditAutomationClient:
             # Submit
             submit_btn = page.locator(RedditLocators.POST_SUBMIT_BUTTON).first
             await submit_btn.wait_for(state="visible", timeout=5000)
+
+            # Check if submit button is enabled; blur input if needed
+            if not await submit_btn.is_enabled():
+                await page.keyboard.press("Tab")
+                await asyncio.sleep(0.5)
+
             box = await submit_btn.bounding_box()
             if box:
                 await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
             else:
                 await submit_btn.click()
 
-            # Wait for navigation to the published post
-            await page.wait_for_url(re.compile(r"/comments/"), timeout=15000)
-            final_url = page.url
+            # Wait for navigation to the published post or catch error toast
+            try:
+                await page.wait_for_url(re.compile(r"/comments/"), timeout=15000)
+                final_url = page.url
+                match = re.search(r"/comments/([a-z0-9]+)/", final_url)
+                post_id = f"t3_{match.group(1)}" if match else None
 
-            match = re.search(r"/comments/([a-z0-9]+)/", final_url)
-            post_id = f"t3_{match.group(1)}" if match else None
-
-            return RedditPostResultDTO(
-                success=True,
-                post_id=post_id,
-                permalink=final_url,
-                title=payload.title,
-                target=payload.target,
-                message="Post successfully published to Reddit."
-            )
+                return RedditPostResultDTO(
+                    success=True,
+                    post_id=post_id,
+                    permalink=final_url,
+                    title=payload.title,
+                    target=payload.target,
+                    message="Post successfully published to Reddit."
+                )
+            except PlaywrightTimeoutError:
+                error_elem = page.locator('[role="alert"], shreddit-alert, [data-testid="toast-error"]').first
+                err_msg = "Submission timeout: post was not redirected to comments. Possible flair requirement or subreddit rate limit."
+                if await error_elem.count() > 0:
+                    err_msg = f"Submission error from Reddit: {await error_elem.inner_text()}"
+                return RedditPostResultDTO(
+                    success=False,
+                    title=payload.title,
+                    target=payload.target,
+                    message=err_msg
+                )
 
     async def submit_comment(self, payload: RedditCommentSubmissionDTO) -> RedditCommentResultDTO:
         """Publishes a top-level comment or replies to an existing comment."""
+        if not (self.config.storage_state and self.config.storage_state.exists()):
+            return RedditCommentResultDTO(
+                success=False,
+                post_id=payload.post_id_or_url,
+                permalink="",
+                body=payload.body,
+                message="Authentication required: No storage_state.json found. Please authenticate using scripts/login.py first."
+            )
+
         target_url = payload.post_id_or_url
         if not target_url.startswith("http"):
             # Assume post ID
@@ -330,6 +388,7 @@ class RedditAutomationClient:
             else:
                 await submit_btn.click()
 
+            await asyncio.sleep(1.0)
             return RedditCommentResultDTO(
                 success=True,
                 post_id=payload.post_id_or_url,
@@ -344,6 +403,14 @@ class RedditAutomationClient:
 
     async def vote(self, target_id_or_url: str, direction: int) -> RedditActionResultDTO:
         """Upvotes (1), downvotes (-1), or removes vote (0) on a post or comment."""
+        if not (self.config.storage_state and self.config.storage_state.exists()):
+            return RedditActionResultDTO(
+                success=False,
+                action="vote",
+                target_id=target_id_or_url,
+                message="Authentication required: No storage_state.json found. Please authenticate using scripts/login.py first."
+            )
+
         async with self.pool.get_page() as page:
             if target_id_or_url.startswith("http"):
                 await page.goto(target_id_or_url, wait_until="domcontentloaded")
@@ -378,6 +445,14 @@ class RedditAutomationClient:
 
     async def save_post(self, target_id_or_url: str, unsave: bool = False) -> RedditActionResultDTO:
         """Saves or unsaves a post or comment."""
+        if not (self.config.storage_state and self.config.storage_state.exists()):
+            return RedditActionResultDTO(
+                success=False,
+                action="save",
+                target_id=target_id_or_url,
+                message="Authentication required: No storage_state.json found. Please authenticate using scripts/login.py first."
+            )
+
         async with self.pool.get_page() as page:
             url = target_id_or_url if target_id_or_url.startswith("http") else f"https://www.reddit.com/comments/{re.sub(r'^t[13]_', '', target_id_or_url)}/"
             await page.goto(url, wait_until="domcontentloaded")
@@ -398,8 +473,14 @@ class RedditAutomationClient:
     # 5. Thread & Nested Discussion Tree Reading
     # =========================================================================
 
-    def _parse_comment_node(self, comment_raw: Dict[str, Any], depth: int = 0) -> Optional[RedditCommentNodeDTO]:
-        """Recursively parses a comment node from Reddit JSON structure."""
+    def _parse_comment_node(
+        self,
+        comment_raw: Dict[str, Any],
+        depth: int = 0,
+        max_depth: int = 5,
+        max_children_per_node: int = 10
+    ) -> Optional[RedditCommentNodeDTO]:
+        """Recursively parses a comment node with strict depth and child-count limits to prevent token explosion."""
         if comment_raw.get("kind") != "t1":
             return None
 
@@ -413,11 +494,19 @@ class RedditAutomationClient:
             parent_id=data.get("parent_id")
         )
 
+        if depth >= max_depth:
+            return node
+
         replies_raw = data.get("replies")
         if isinstance(replies_raw, dict):
             children = replies_raw.get("data", {}).get("children", [])
-            for child in children:
-                child_node = self._parse_comment_node(child, depth=depth + 1)
+            for child in children[:max_children_per_node]:
+                child_node = self._parse_comment_node(
+                    child,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    max_children_per_node=max_children_per_node
+                )
                 if child_node:
                     node.replies.append(child_node)
 
@@ -425,6 +514,11 @@ class RedditAutomationClient:
 
     async def read_thread(self, thread_url_or_id: str, max_depth: int = 5) -> RedditThreadDTO:
         """Extracts complete thread and parses full hierarchical comment tree."""
+        cache_key = f"thread:{thread_url_or_id}:{max_depth}"
+        cached = self._get_from_cache(cache_key)
+        if cached is not None:
+            return cached
+
         if thread_url_or_id.startswith("http"):
             json_url = thread_url_or_id.rstrip("/") + ".json"
         else:
@@ -433,6 +527,11 @@ class RedditAutomationClient:
 
         async with self.pool.get_page() as page:
             response = await page.request.get(json_url)
+            if response.status in (429, 503):
+                logger.warning(f"Reddit read_thread throttled (HTTP {response.status}). Retrying with backoff...")
+                await asyncio.sleep(2.0 + random.uniform(0.5, 1.5))
+                response = await page.request.get(json_url)
+
             if response.status == 200:
                 payload = await response.json()
                 if isinstance(payload, list) and len(payload) >= 2:
@@ -441,11 +540,11 @@ class RedditAutomationClient:
 
                     comment_nodes: List[RedditCommentNodeDTO] = []
                     for raw_child in comments_data:
-                        parsed = self._parse_comment_node(raw_child, depth=0)
+                        parsed = self._parse_comment_node(raw_child, depth=0, max_depth=max_depth)
                         if parsed:
                             comment_nodes.append(parsed)
 
-                    return RedditThreadDTO(
+                    thread_result = RedditThreadDTO(
                         post_id=post_data.get("name", ""),
                         title=post_data.get("title", ""),
                         author=post_data.get("author", ""),
@@ -459,6 +558,8 @@ class RedditAutomationClient:
                         total_comments=post_data.get("num_comments", 0),
                         comments=comment_nodes
                     )
+                    self._set_cache(cache_key, thread_result, ttl_seconds=60.0)
+                    return thread_result
 
             # Fallback to DOM rendering
             direct_url = thread_url_or_id if thread_url_or_id.startswith("http") else f"https://www.reddit.com/comments/{thread_url_or_id}/"
@@ -467,13 +568,38 @@ class RedditAutomationClient:
             title_elem = page.locator("h1").first
             title = (await title_elem.inner_text()).strip() if await title_elem.count() > 0 else "Reddit Post"
 
+            # Parse comments from DOM
+            dom_comments: List[RedditCommentNodeDTO] = []
+            comment_elements = page.locator("shreddit-comment")
+            comment_count = await comment_elements.count()
+            for idx in range(min(comment_count, 15)):
+                elem = comment_elements.nth(idx)
+                c_author = await elem.get_attribute("author") or "[unknown]"
+                c_score_attr = await elem.get_attribute("score") or "0"
+                try:
+                    c_score = int(c_score_attr)
+                except ValueError:
+                    c_score = 0
+                c_body_elem = elem.locator('div[slot="comment"]').first
+                c_body = (await c_body_elem.inner_text()).strip() if await c_body_elem.count() > 0 else ""
+                dom_comments.append(
+                    RedditCommentNodeDTO(
+                        comment_id=await elem.get_attribute("thingid") or f"dom_{idx}",
+                        author=c_author,
+                        score=c_score,
+                        body=c_body,
+                        depth=0,
+                        replies=[]
+                    )
+                )
+
             return RedditThreadDTO(
                 post_id=thread_url_or_id,
                 title=title,
                 author="unknown",
                 subreddit="unknown",
                 permalink=direct_url,
-                comments=[]
+                comments=dom_comments
             )
 
     # =========================================================================
@@ -488,14 +614,24 @@ class RedditAutomationClient:
         limit: int = 25
     ) -> RedditSubredditBrowseDTO:
         """Browses posts from a subreddit using structured listings."""
-        sub = subreddit.replace("r/", "").strip()
+        sub = re.sub(r"[^\w-]", "", subreddit.replace("r/", "").strip())
         sort_clean = sort.lower()
+        cache_key = f"browse:{sub}:{sort_clean}:{time_filter}:{limit}"
+        cached = self._get_from_cache(cache_key)
+        if cached is not None:
+            return cached
+
         json_url = f"https://www.reddit.com/r/{sub}/{sort_clean}.json?limit={limit}"
         if time_filter:
             json_url += f"&t={time_filter}"
 
         async with self.pool.get_page() as page:
             response = await page.request.get(json_url)
+            if response.status in (429, 503):
+                logger.warning(f"Reddit browse r/{sub} throttled (HTTP {response.status}). Retrying with backoff...")
+                await asyncio.sleep(2.0 + random.uniform(0.5, 1.5))
+                response = await page.request.get(json_url)
+
             posts: List[RedditPostSummaryDTO] = []
             if response.status == 200:
                 data = await response.json()
@@ -517,13 +653,15 @@ class RedditAutomationClient:
                         )
                     )
 
-            return RedditSubredditBrowseDTO(
+            result = RedditSubredditBrowseDTO(
                 subreddit=sub,
                 sort=sort_clean,
                 time_filter=time_filter,
                 count=len(posts),
                 posts=posts
             )
+            self._set_cache(cache_key, result, ttl_seconds=60.0)
+            return result
 
     async def search(
         self,
@@ -534,15 +672,25 @@ class RedditAutomationClient:
         limit: int = 25
     ) -> RedditSearchDTO:
         """Performs advanced search across Reddit or scoped to a subreddit."""
-        q_enc = quote_plus(query)
-        if subreddit:
-            sub = subreddit.replace("r/", "").strip()
-            json_url = f"https://www.reddit.com/r/{sub}/search.json?q={q_enc}&restrict_sr=1&sort={sort}&t={time_filter}&limit={limit}"
+        q_enc = quote_plus(query.strip())
+        sub_clean = re.sub(r"[^\w-]", "", subreddit.replace("r/", "").strip()) if subreddit else None
+        cache_key = f"search:{query}:{sub_clean}:{sort}:{time_filter}:{limit}"
+        cached = self._get_from_cache(cache_key)
+        if cached is not None:
+            return cached
+
+        if sub_clean:
+            json_url = f"https://www.reddit.com/r/{sub_clean}/search.json?q={q_enc}&restrict_sr=1&sort={sort}&t={time_filter}&limit={limit}"
         else:
             json_url = f"https://www.reddit.com/search.json?q={q_enc}&sort={sort}&t={time_filter}&limit={limit}"
 
         async with self.pool.get_page() as page:
             response = await page.request.get(json_url)
+            if response.status in (429, 503):
+                logger.warning(f"Reddit search '{query}' throttled (HTTP {response.status}). Retrying with backoff...")
+                await asyncio.sleep(2.0 + random.uniform(0.5, 1.5))
+                response = await page.request.get(json_url)
+
             results: List[RedditPostSummaryDTO] = []
             if response.status == 200:
                 data = await response.json()
@@ -554,7 +702,7 @@ class RedditAutomationClient:
                             post_id=cd.get("name", cd.get("id", "")),
                             title=cd.get("title", ""),
                             author=cd.get("author", "[deleted]"),
-                            subreddit=cd.get("subreddit", subreddit or ""),
+                            subreddit=cd.get("subreddit", sub_clean or ""),
                             score=cd.get("score", 0),
                             comments_count=cd.get("num_comments", 0),
                             url=cd.get("url"),
@@ -564,18 +712,25 @@ class RedditAutomationClient:
                         )
                     )
 
-            return RedditSearchDTO(
+            search_result = RedditSearchDTO(
                 query=query,
-                subreddit=subreddit,
+                subreddit=sub_clean,
                 sort=sort,
                 time_filter=time_filter,
                 total_found=len(results),
                 results=results
             )
+            self._set_cache(cache_key, search_result, ttl_seconds=60.0)
+            return search_result
 
     async def browse_user(self, username: str, limit: int = 20) -> RedditUserHistoryDTO:
         """Audits a user's submitted posts, comments, and public activity."""
-        clean_user = username.replace("u/", "").strip()
+        clean_user = re.sub(r"[^\w-]", "", username.replace("u/", "").strip())
+        cache_key = f"user:{clean_user}:{limit}"
+        cached = self._get_from_cache(cache_key)
+        if cached is not None:
+            return cached
+
         json_url = f"https://www.reddit.com/user/{clean_user}/submitted.json?limit={limit}"
 
         async with self.pool.get_page() as page:
@@ -599,10 +754,12 @@ class RedditAutomationClient:
                         )
                     )
 
-            return RedditUserHistoryDTO(
+            user_result = RedditUserHistoryDTO(
                 username=clean_user,
                 recent_posts=posts
             )
+            self._set_cache(cache_key, user_result, ttl_seconds=60.0)
+            return user_result
 
     # =========================================================================
     # 7. Direct Messaging & Inbox Processing
@@ -610,6 +767,14 @@ class RedditAutomationClient:
 
     async def send_message(self, payload: RedditSendMessageDTO) -> RedditActionResultDTO:
         """Sends a private direct message to a user."""
+        if not (self.config.storage_state and self.config.storage_state.exists()):
+            return RedditActionResultDTO(
+                success=False,
+                action="send_message",
+                target_id=payload.recipient,
+                message="Authentication required: No storage_state.json found. Please authenticate using scripts/login.py first."
+            )
+
         async with self.pool.get_page() as page:
             await page.goto("https://www.reddit.com/message/compose/", wait_until="domcontentloaded")
 
@@ -682,6 +847,7 @@ class RedditAutomationClient:
 
         for sub in target_subs:
             for kw in search_terms:
+                await asyncio.sleep(random.uniform(1.0, 2.0))
                 search_res = await self.search(query=kw, subreddit=sub, sort="new", limit=10)
                 for item in search_res.results:
                     title_lower = item.title.lower()
