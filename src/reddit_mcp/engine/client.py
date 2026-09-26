@@ -89,17 +89,17 @@ class RedditAutomationClient:
                     status_message=f"Network navigation failure: {exc}"
                 )
 
-            # Inspect DOM for user elements
+            # Inspect DOM for user elements (using container elements, avoiding route-aborted img tags)
             user_menu = page.locator(RedditLocators.AUTH_USER_MENU).first
             avatar = page.locator(RedditLocators.AUTH_AVATAR).first
 
             is_logged_in = False
             try:
-                await avatar.wait_for(state="visible", timeout=4000)
+                await avatar.wait_for(state="visible", timeout=2500)
                 is_logged_in = True
             except PlaywrightTimeoutError:
                 try:
-                    await user_menu.wait_for(state="visible", timeout=2000)
+                    await user_menu.wait_for(state="visible", timeout=1500)
                     is_logged_in = True
                 except PlaywrightTimeoutError:
                     is_logged_in = False
@@ -318,14 +318,59 @@ class RedditAutomationClient:
                         await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
                     await KeyboardController.human_type(body_elem, payload.body)
 
+                    # Trigger Lexical / Draft.js input events to update reactive store
+                    try:
+                        handle = await body_elem.element_handle()
+                        if handle:
+                            await page.evaluate("""(el) => {
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                            }""", handle)
+                    except Exception:
+                        pass
+
+            # Handle Subreddit Post Flair if specified
+            if payload.flair:
+                flair_btn = page.locator(RedditLocators.POST_FLAIR_BUTTON).first
+                if await flair_btn.count() > 0 and await flair_btn.is_visible():
+                    await flair_btn.click()
+                    await asyncio.sleep(0.5)
+                    flair_opt = page.locator(f'{RedditLocators.POST_FLAIR_MODAL} li:has-text("{payload.flair}"), {RedditLocators.POST_FLAIR_MODAL} [role="radio"]:has-text("{payload.flair}")').first
+                    if await flair_opt.count() > 0:
+                        await flair_opt.click()
+                        await asyncio.sleep(0.3)
+                        apply_btn = page.locator(f'{RedditLocators.POST_FLAIR_MODAL} button:has-text("Apply")').first
+                        if await apply_btn.count() > 0:
+                            await apply_btn.click()
+                            await asyncio.sleep(0.3)
+
             # Submit
             submit_btn = page.locator(RedditLocators.POST_SUBMIT_BUTTON).first
             await submit_btn.wait_for(state="visible", timeout=5000)
 
-            # Check if submit button is enabled; blur input if needed
+            # If submit button is disabled, handle mandatory flair requirement and nudge Lexical editor
             if not await submit_btn.is_enabled():
+                flair_btn = page.locator(RedditLocators.POST_FLAIR_BUTTON).first
+                if await flair_btn.count() > 0 and await flair_btn.is_visible():
+                    logger.info("Submit button disabled; selecting first available flair for mandatory flair subreddit.")
+                    await flair_btn.click()
+                    await asyncio.sleep(0.5)
+                    first_flair = page.locator(f'{RedditLocators.POST_FLAIR_MODAL} li [role="radio"], {RedditLocators.POST_FLAIR_MODAL} li').first
+                    if await first_flair.count() > 0:
+                        await first_flair.click()
+                        await asyncio.sleep(0.3)
+                        apply_btn = page.locator(f'{RedditLocators.POST_FLAIR_MODAL} button:has-text("Apply")').first
+                        if await apply_btn.count() > 0:
+                            await apply_btn.click()
+                            await asyncio.sleep(0.3)
+
+                # Nudge Lexical editor with Space + Backspace
+                await page.keyboard.press("Space")
+                await asyncio.sleep(0.05)
+                await page.keyboard.press("Backspace")
+                await asyncio.sleep(0.1)
                 await page.keyboard.press("Tab")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
             box = await submit_btn.bounding_box()
             if box:
@@ -381,25 +426,77 @@ class RedditAutomationClient:
             await page.goto(target_url, wait_until="domcontentloaded")
 
             if payload.parent_comment_id:
-                # Nested reply
+                # Nested reply strictly scoped within parent comment node
                 clean_comment_id = re.sub(r"^t1_", "", payload.parent_comment_id)
-                reply_trigger = page.locator(
-                    f'shreddit-comment[thingid*="{clean_comment_id}"] button[aria-label*="reply"], button[data-testid="reply-button"]'
+                comment_node = page.locator(
+                    f'shreddit-comment[thingid*="{clean_comment_id}"], shreddit-comment[id*="{clean_comment_id}"]'
+                ).first
+                await comment_node.wait_for(state="visible", timeout=8000)
+
+                reply_trigger = comment_node.locator(
+                    'button[aria-label*="reply" i], button[data-testid="reply-button"], button:has-text("Reply")'
                 ).first
                 await reply_trigger.wait_for(state="visible", timeout=6000)
                 await reply_trigger.click()
+                await asyncio.sleep(0.5)
 
-            # Focus comment input
-            comment_input = page.locator(RedditLocators.COMMENT_BOX).first
-            await comment_input.wait_for(state="visible", timeout=6000)
-            box = await comment_input.bounding_box()
-            if box:
-                await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
-            await KeyboardController.human_type(comment_input, payload.body)
+                # Focus comment input inside the comment node
+                comment_input = comment_node.locator(RedditLocators.COMMENT_BOX).first
+                if await comment_input.count() == 0:
+                    comment_input = page.locator(RedditLocators.COMMENT_BOX).last
+                await comment_input.wait_for(state="visible", timeout=6000)
 
-            # Submit
-            submit_btn = page.locator(RedditLocators.COMMENT_SUBMIT_BUTTON).first
+                box = await comment_input.bounding_box()
+                if box:
+                    await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+                await KeyboardController.human_type(comment_input, payload.body)
+
+                # Trigger Lexical / Draft.js input events to update reactive store
+                try:
+                    handle = await comment_input.element_handle()
+                    if handle:
+                        await page.evaluate("""(el) => {
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }""", handle)
+                except Exception:
+                    pass
+
+                # Locate submit button inside the comment node
+                submit_btn = comment_node.locator(RedditLocators.COMMENT_SUBMIT_BUTTON).first
+                if await submit_btn.count() == 0:
+                    submit_btn = page.locator(RedditLocators.COMMENT_SUBMIT_BUTTON).last
+            else:
+                # Top-level post comment
+                comment_input = page.locator(RedditLocators.COMMENT_BOX).first
+                await comment_input.wait_for(state="visible", timeout=6000)
+                box = await comment_input.bounding_box()
+                if box:
+                    await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+                await KeyboardController.human_type(comment_input, payload.body)
+
+                # Trigger Lexical / Draft.js input events
+                try:
+                    handle = await comment_input.element_handle()
+                    if handle:
+                        await page.evaluate("""(el) => {
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }""", handle)
+                except Exception:
+                    pass
+
+                submit_btn = page.locator(RedditLocators.COMMENT_SUBMIT_BUTTON).first
+
             await submit_btn.wait_for(state="visible", timeout=5000)
+
+            # Nudge Lexical editor if button is still disabled
+            if not await submit_btn.is_enabled():
+                await page.keyboard.press("Space")
+                await asyncio.sleep(0.05)
+                await page.keyboard.press("Backspace")
+                await asyncio.sleep(0.1)
+
             box = await submit_btn.bounding_box()
             if box:
                 await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
@@ -430,21 +527,50 @@ class RedditAutomationClient:
             )
 
         async with self.pool.get_page() as page:
+            is_comment = target_id_or_url.startswith("t1_") or ("/comment/" in target_id_or_url) or ("/comments/" in target_id_or_url and "/_/" in target_id_or_url)
+
             if target_id_or_url.startswith("http"):
                 await page.goto(target_id_or_url, wait_until="domcontentloaded")
-                target_locator = page
+            elif target_id_or_url.startswith("t1_"):
+                clean_comment_id = target_id_or_url.replace("t1_", "")
+                navigated = False
+                try:
+                    resp = await page.request.get(f"https://www.reddit.com/api/info.json?id={target_id_or_url}")
+                    if resp.status == 200:
+                        info_data = await resp.json()
+                        children = info_data.get("data", {}).get("children", [])
+                        if children:
+                            permalink = children[0].get("data", {}).get("permalink")
+                            if permalink:
+                                await page.goto(f"https://www.reddit.com{permalink}", wait_until="domcontentloaded")
+                                navigated = True
+                except Exception:
+                    pass
+                if not navigated:
+                    await page.goto(f"https://www.reddit.com/comments/any/_/{clean_comment_id}/", wait_until="domcontentloaded")
             else:
-                clean_id = re.sub(r"^t[13]_", "", target_id_or_url)
+                clean_id = re.sub(r"^t3_", "", target_id_or_url)
                 await page.goto(f"https://www.reddit.com/comments/{clean_id}/", wait_until="domcontentloaded")
-                target_locator = page
 
-            if direction == 1:
-                btn = target_locator.locator(RedditLocators.UPVOTE_BUTTON).first
-            elif direction == -1:
-                btn = target_locator.locator(RedditLocators.DOWNVOTE_BUTTON).first
+            if is_comment:
+                clean_cid = re.sub(r"^t1_", "", target_id_or_url)
+                comment_elem = page.locator(f'shreddit-comment[thingid*="{clean_cid}"], shreddit-comment[id*="{clean_cid}"]').first
+                container = comment_elem if await comment_elem.count() > 0 else page
+                if direction == 1:
+                    btn = container.locator(RedditLocators.COMMENT_UPVOTE_BUTTON).first
+                elif direction == -1:
+                    btn = container.locator(RedditLocators.COMMENT_DOWNVOTE_BUTTON).first
+                else:
+                    btn = container.locator(RedditLocators.COMMENT_UPVOTE_BUTTON).first
             else:
-                # Re-click active button to clear
-                btn = target_locator.locator(RedditLocators.UPVOTE_BUTTON).first
+                post_elem = page.locator("shreddit-post").first
+                container = post_elem if await post_elem.count() > 0 else page
+                if direction == 1:
+                    btn = container.locator(RedditLocators.POST_UPVOTE_BUTTON).first
+                elif direction == -1:
+                    btn = container.locator(RedditLocators.POST_DOWNVOTE_BUTTON).first
+                else:
+                    btn = container.locator(RedditLocators.POST_UPVOTE_BUTTON).first
 
             await btn.wait_for(state="visible", timeout=6000)
             box = await btn.bounding_box()
@@ -670,16 +796,24 @@ class RedditAutomationClient:
                             body_preview=cd.get("selftext", "")[:250] if cd.get("selftext") else None
                         )
                     )
+                result = RedditSubredditBrowseDTO(
+                    subreddit=sub,
+                    sort=sort_clean,
+                    time_filter=time_filter,
+                    count=len(posts),
+                    posts=posts
+                )
+                self._set_cache(cache_key, result, ttl_seconds=60.0)
+                return result
 
-            result = RedditSubredditBrowseDTO(
+            logger.warning(f"Reddit browse r/{sub} returned HTTP {response.status}. Skipping cache.")
+            return RedditSubredditBrowseDTO(
                 subreddit=sub,
                 sort=sort_clean,
                 time_filter=time_filter,
-                count=len(posts),
-                posts=posts
+                count=0,
+                posts=[]
             )
-            self._set_cache(cache_key, result, ttl_seconds=60.0)
-            return result
 
     async def search(
         self,
@@ -729,17 +863,26 @@ class RedditAutomationClient:
                             body_preview=cd.get("selftext", "")[:250] if cd.get("selftext") else None
                         )
                     )
+                search_result = RedditSearchDTO(
+                    query=query,
+                    subreddit=sub_clean,
+                    sort=sort,
+                    time_filter=time_filter,
+                    total_found=len(results),
+                    results=results
+                )
+                self._set_cache(cache_key, search_result, ttl_seconds=60.0)
+                return search_result
 
-            search_result = RedditSearchDTO(
+            logger.warning(f"Reddit search '{query}' returned HTTP {response.status}. Skipping cache.")
+            return RedditSearchDTO(
                 query=query,
                 subreddit=sub_clean,
                 sort=sort,
                 time_filter=time_filter,
-                total_found=len(results),
-                results=results
+                total_found=0,
+                results=[]
             )
-            self._set_cache(cache_key, search_result, ttl_seconds=60.0)
-            return search_result
 
     async def browse_user(self, username: str, limit: int = 20) -> RedditUserHistoryDTO:
         """Audits a user's submitted posts, comments, and public activity."""
@@ -771,13 +914,18 @@ class RedditAutomationClient:
                             created_utc=str(cd.get("created_utc"))
                         )
                     )
+                user_result = RedditUserHistoryDTO(
+                    username=clean_user,
+                    recent_posts=posts
+                )
+                self._set_cache(cache_key, user_result, ttl_seconds=60.0)
+                return user_result
 
-            user_result = RedditUserHistoryDTO(
+            logger.warning(f"Reddit user browse u/{clean_user} returned HTTP {response.status}. Skipping cache.")
+            return RedditUserHistoryDTO(
                 username=clean_user,
-                recent_posts=posts
+                recent_posts=[]
             )
-            self._set_cache(cache_key, user_result, ttl_seconds=60.0)
-            return user_result
 
     # =========================================================================
     # 7. Direct Messaging & Inbox Processing

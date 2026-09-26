@@ -8,7 +8,7 @@ class RedditLocators:
 
     # Navigation & Authentication
     AUTH_USER_MENU = 'button#USER_DROPDOWN_ID, button[aria-label*="User menu"], [data-testid="user-dropdown"]'
-    AUTH_AVATAR = 'reddit-header-action-items button img, [data-testid="user-avatar"]'
+    AUTH_AVATAR = 'reddit-header-action-items button, #expand-user-drawer-button, shreddit-async-loader[bundlename="user_drawer"] button, [data-testid="user-avatar"]'
     AUTH_USERNAME = '[data-testid="user-name"], shreddit-header-action-items [data-username]'
     AUTH_KARMA = '[data-testid="karma-count"], [id*="karma"]'
     AUTH_NOTIFICATION_BADGE = 'a[href*="/notifications"] [data-testid="notification-indicator"], a[href*="/message/inbox"]'
@@ -29,7 +29,8 @@ class RedditLocators:
     POST_MARKDOWN_BODY = 'div[contenteditable="true"][role="textbox"], textarea[placeholder*="Text"], [data-testid="post-body-input"]'
     POST_LINK_TAB = 'button:has-text("Link"), [role="tab"]:has-text("Link")'
     POST_LINK_URL_INPUT = 'textarea[placeholder*="Url"], input[placeholder*="Url"]'
-    POST_FLAIR_BUTTON = 'button:has-text("Add flair"), button:has-text("Flair")'
+    POST_FLAIR_BUTTON = 'button:has-text("Add flair"), button:has-text("Flair"), button[aria-label*="flair" i]'
+    POST_FLAIR_MODAL = 'shreddit-post-flair-modal, div[role="dialog"]'
     POST_SUBMIT_BUTTON = 'button:has-text("Post"), button:has-text("Submit"), button[type="submit"]'
 
     # Comments
@@ -38,8 +39,12 @@ class RedditLocators:
     COMMENT_REPLY_BUTTON = 'button:has-text("Reply"), shreddit-comment button[aria-label*="reply"]'
 
     # Voting & Engagement
-    UPVOTE_BUTTON = 'shreddit-post button[aria-label*="upvote"], button[data-click-id="upvote"], [data-testid="upvote-button"]'
-    DOWNVOTE_BUTTON = 'shreddit-post button[aria-label*="downvote"], button[data-click-id="downvote"], [data-testid="downvote-button"]'
+    POST_UPVOTE_BUTTON = 'shreddit-post button[aria-label*="upvote"], shreddit-post button[data-click-id="upvote"], shreddit-post [data-testid="upvote-button"]'
+    POST_DOWNVOTE_BUTTON = 'shreddit-post button[aria-label*="downvote"], shreddit-post button[data-click-id="downvote"], shreddit-post [data-testid="downvote-button"]'
+    COMMENT_UPVOTE_BUTTON = 'button[aria-label*="upvote"], button[data-click-id="upvote"], [data-testid="upvote-button"]'
+    COMMENT_DOWNVOTE_BUTTON = 'button[aria-label*="downvote"], button[data-click-id="downvote"], [data-testid="downvote-button"]'
+    UPVOTE_BUTTON = POST_UPVOTE_BUTTON
+    DOWNVOTE_BUTTON = POST_DOWNVOTE_BUTTON
     SAVE_BUTTON = 'button:has-text("Save"), [data-testid="save-button"]'
 
     # Feeds, Search & Listings
