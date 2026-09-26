@@ -14,6 +14,7 @@ Powered directly by [behavioral-playwright](https://github.com/sadik004/behavior
 
 ## 📑 Table of Contents
 
+- [📖 Quick Playbook & Cheatsheet (সহজ ব্যবহার নির্দেশিকা)](PLAYBOOK.md)
 - [Key Capabilities](#-key-capabilities)
 - [Architecture Overview](#-architecture-overview)
 - [Tool Catalog (15 Tools)](#-tool-catalog)
