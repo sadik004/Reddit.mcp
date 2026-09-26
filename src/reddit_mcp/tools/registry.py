@@ -1,6 +1,6 @@
 """
 Tool Registry and Dispatcher for Reddit MCP.
-Exposes 16 typed, human-mimetic tools for Claude, Antigravity, Cursor, and any MCP client.
+Exposes 15 typed, human-mimetic tools for Claude, Antigravity, Cursor, and any MCP client.
 """
 
 import asyncio
@@ -53,7 +53,7 @@ class ToolRegistry:
         return res
 
     def _register_all_tools(self) -> None:
-        """Registers all 16 human-mimetic Reddit tools."""
+        """Registers all 15 human-mimetic Reddit tools."""
 
         # 1. reddit_auth_status
         self.register_tool(

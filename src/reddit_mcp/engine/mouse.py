@@ -3,14 +3,17 @@ Human-mimetic mouse trajectory generator using cubic Bézier curves.
 Generates organic acceleration, decelerations, and sub-pixel micro-jitters.
 """
 
+import asyncio
 import math
 import random
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from playwright.async_api import Page
 
 
 class MouseController:
     """Human-mimetic mouse controller generating organic trajectories."""
+
+    _last_position: Optional[Tuple[float, float]] = None
 
     @staticmethod
     def _calculate_bezier_point(
@@ -96,16 +99,24 @@ class MouseController:
         final_x = target_x + random.uniform(-2.0, 2.0)
         final_y = target_y + random.uniform(-2.0, 2.0)
 
-        # Approximate current position or start from viewport margin
+        # Start from continuous last position if available, otherwise random entry point
+        if cls._last_position is not None:
+            start_x, start_y = cls._last_position
+        else:
+            start_x = random.uniform(100.0, 400.0)
+            start_y = random.uniform(100.0, 300.0)
+
         path = cls.generate_human_path(
-            start_x=random.uniform(100.0, 400.0),
-            start_y=random.uniform(100.0, 300.0),
+            start_x=start_x,
+            start_y=start_y,
             dest_x=final_x,
             dest_y=final_y,
-            steps=random.randint(20, 32)
+            steps=random.randint(18, 28)
         )
 
         for px, py in path:
             await page.mouse.move(px, py)
+            await asyncio.sleep(random.uniform(0.005, 0.012))
 
         await page.mouse.click(final_x, final_y, button=button)
+        cls._last_position = (final_x, final_y)
