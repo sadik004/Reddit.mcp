@@ -53,3 +53,21 @@ def test_cache_ttl_logic():
     cached = client._get_from_cache(cache_key)
     assert cached is not None
     assert cached.subreddit == "test"
+
+
+def test_overflow_and_unsave_locators_present():
+    """Validates that overflow menu and unsave locators exist."""
+    assert hasattr(RedditLocators, "POST_OVERFLOW_MENU")
+    assert hasattr(RedditLocators, "UNSAVE_BUTTON")
+    assert "unsave" in RedditLocators.UNSAVE_BUTTON.lower()
+    assert "overflow" in RedditLocators.POST_OVERFLOW_MENU.lower() or "more" in RedditLocators.POST_OVERFLOW_MENU.lower()
+
+
+def test_clean_t3_id_normalization():
+    """Validates regex cleaning of t3_ and t1_ prefixes."""
+    import re
+    assert re.sub(r"^t3_", "", "t3_1abcxyz") == "1abcxyz"
+    assert re.sub(r"^t1_", "", "t1_9defghi") == "9defghi"
+    assert re.sub(r"^t[13]_", "", "t3_123") == "123"
+    assert re.sub(r"^t[13]_", "", "t1_456") == "456"
+

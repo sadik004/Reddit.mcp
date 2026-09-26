@@ -45,7 +45,9 @@ class RedditLocators:
     COMMENT_DOWNVOTE_BUTTON = 'button[aria-label*="downvote"], button[data-click-id="downvote"], [data-testid="downvote-button"]'
     UPVOTE_BUTTON = POST_UPVOTE_BUTTON
     DOWNVOTE_BUTTON = POST_DOWNVOTE_BUTTON
-    SAVE_BUTTON = 'button:has-text("Save"), [data-testid="save-button"]'
+    POST_OVERFLOW_MENU = 'shreddit-post button[aria-label*="More options" i], button[aria-label*="Overflow" i], button[aria-label*="more" i], button[id*="overflow-menu"]'
+    SAVE_BUTTON = 'button:has-text("Save"), [data-testid="save-button"], button[aria-label*="Save" i]'
+    UNSAVE_BUTTON = 'button:has-text("Unsave"), button:has-text("Remove from saved"), [data-testid="unsave-button"], button[aria-label*="Unsave" i]'
 
     # Feeds, Search & Listings
     POST_CARD = 'shreddit-post, article, div[data-testid="post-container"]'

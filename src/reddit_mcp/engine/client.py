@@ -199,10 +199,27 @@ class RedditAutomationClient:
                 self._set_cache(cache_key, profile_dto, ttl_seconds=60.0)
                 return profile_dto
 
+            if response.status == 404:
+                return RedditProfileDTO(
+                    username=target_user,
+                    display_name=None,
+                    bio="User does not exist or has been suspended by Reddit.",
+                    total_karma=0,
+                    post_karma=0,
+                    comment_karma=0
+                )
+
             # Fallback to HTML DOM parsing
             await page.goto(f"https://www.reddit.com/user/{target_user}/", wait_until="domcontentloaded")
             h1 = page.locator("h1").first
             name = (await h1.inner_text()).strip() if await h1.count() > 0 else target_user
+            if "nobody on reddit" in name.lower():
+                return RedditProfileDTO(
+                    username=target_user,
+                    display_name=None,
+                    bio="User does not exist or has been suspended by Reddit."
+                )
+
             profile_dto = RedditProfileDTO(
                 username=target_user,
                 display_name=name
@@ -252,7 +269,11 @@ class RedditAutomationClient:
                     await nsfw_switch.click()
                     updated.append("is_nsfw")
 
-            # 4. Save Changes
+            # Blur fields to trigger modern Reddit auto-save
+            await page.keyboard.press("Tab")
+            await asyncio.sleep(0.5)
+
+            # 4. Save Changes (legacy save button if present)
             save_button = page.locator(RedditLocators.PROFILE_SAVE_BUTTON).first
             if await save_button.count() > 0 and await save_button.is_enabled():
                 box = await save_button.bounding_box()
@@ -260,6 +281,7 @@ class RedditAutomationClient:
                     await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
                 else:
                     await save_button.click()
+                await asyncio.sleep(0.5)
 
             return RedditProfileUpdateResultDTO(
                 success=True,
@@ -598,19 +620,33 @@ class RedditAutomationClient:
             )
 
         async with self.pool.get_page() as page:
-            url = target_id_or_url if target_id_or_url.startswith("http") else f"https://www.reddit.com/comments/{re.sub(r'^t[13]_', '', target_id_or_url)}/"
+            clean_target = re.sub(r"^t[13]_", "", target_id_or_url)
+            url = target_id_or_url if target_id_or_url.startswith("http") else f"https://www.reddit.com/comments/{clean_target}/"
             await page.goto(url, wait_until="domcontentloaded")
 
-            btn = page.locator(RedditLocators.SAVE_BUTTON).first
-            await btn.wait_for(state="visible", timeout=6000)
-            await btn.click()
+            action_name = "unsave" if unsave else "save"
+            selector = RedditLocators.UNSAVE_BUTTON if unsave else RedditLocators.SAVE_BUTTON
 
-            action = "unsave" if unsave else "save"
+            btn = page.locator(selector).first
+            # If button is not directly visible, open Shreddit overflow menu first
+            if await btn.count() == 0 or not await btn.is_visible():
+                overflow = page.locator(RedditLocators.POST_OVERFLOW_MENU).first
+                if await overflow.count() > 0 and await overflow.is_visible():
+                    await overflow.click()
+                    await asyncio.sleep(0.4)
+
+            await btn.wait_for(state="visible", timeout=6000)
+            box = await btn.bounding_box()
+            if box:
+                await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+            else:
+                await btn.click()
+
             return RedditActionResultDTO(
                 success=True,
-                action=action,
+                action=action_name,
                 target_id=target_id_or_url,
-                message=f"Successfully executed {action} on {target_id_or_url}."
+                message=f"Successfully executed {action_name} on {target_id_or_url}."
             )
 
     # =========================================================================
@@ -706,7 +742,8 @@ class RedditAutomationClient:
                     return thread_result
 
             # Fallback to DOM rendering
-            direct_url = thread_url_or_id if thread_url_or_id.startswith("http") else f"https://www.reddit.com/comments/{thread_url_or_id}/"
+            clean_thread_id = re.sub(r"^t3_", "", thread_url_or_id)
+            direct_url = thread_url_or_id if thread_url_or_id.startswith("http") else f"https://www.reddit.com/comments/{clean_thread_id}/"
             await page.goto(direct_url, wait_until="domcontentloaded")
 
             title_elem = page.locator("h1").first
@@ -964,6 +1001,18 @@ class RedditAutomationClient:
                 await MouseController.human_move_and_click(page, box["x"] + box["width"]/2, box["y"] + box["height"]/2)
             else:
                 await send_btn.click()
+
+            # Wait briefly to verify delivery and detect Reddit error banners
+            await asyncio.sleep(1.2)
+            error_elem = page.locator(".error, .status.error, [role='alert'], .c-alert-danger, [data-testid='toast-error']").first
+            if await error_elem.count() > 0 and await error_elem.is_visible():
+                err_text = (await error_elem.inner_text()).strip()
+                return RedditActionResultDTO(
+                    success=False,
+                    action="send_message",
+                    target_id=recipient_clean,
+                    message=f"Reddit error delivering message to u/{recipient_clean}: {err_text}"
+                )
 
             return RedditActionResultDTO(
                 success=True,
