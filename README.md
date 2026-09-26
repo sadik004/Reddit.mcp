@@ -8,7 +8,7 @@
 
 A production-grade, standalone **Model Context Protocol (MCP)** server that equips AI assistants (Claude Desktop, Antigravity, Cursor, Cline) with **100% human-mimetic control over Reddit**.
 
-Powered by behavioral automation principles, this server mimics real human interactions using cubic Bézier mouse curves, Weibull-distributed typing latency, single-browser multi-context pooling, and route-level asset abortion.
+Powered directly by [behavioral-playwright](https://github.com/sadik004/behavioral-playwright), this server mimics real human interactions using Costello's two-phase saccadic search mouse trajectories with Harris-Wolpert muscle noise, Dhakal keyboard kinematics with Euclidean key-distance Weibull typing latency, single-browser multi-context pooling, and biometric fingerprint evasion.
 
 ---
 
@@ -30,11 +30,11 @@ Powered by behavioral automation principles, this server mimics real human inter
 
 ## 🌟 Key Capabilities
 
-1. **Human-Mimetic Dynamics**:
-   - **Cubic Bézier Mouse Curves**: Generates organic acceleration, decelerations, and sub-pixel micro-jitters.
-   - **Weibull Keystroke Delays**: Replicates natural human typing variance with punctuation pauses and burst cadence.
+1. **Biometric & Behavioral Dynamics (via `behavioral_playwright`)**:
+   - **Costello Saccadic Curves & Harris-Wolpert Noise**: Two-phase ballistic and corrective trajectories with speed-modulated muscle jitter via `BiomechanicalTremorEngine`.
+   - **Dhakal Keystroke Kinematics**: Key-to-key Euclidean distance scaling with Weibull flight and dwell distributions via `LinguisticKeystrokeDynamicsEngine`.
    - **Route-Level Asset Abortion**: Automatically drops images, fonts, tracking beacons, and media to save bandwidth and maximize DOM performance.
-   - **Anti-Fingerprinting**: Strips `navigator.webdriver`, spoofs Chrome runtime objects, and configures realistic viewport dimensions.
+   - **Biometric Fingerprint Evasion**: Employs `FingerprintGenerator` to mask `navigator.webdriver`, canvas, WebGL, and runtime objects.
 
 2. **Full Lifecycle Reddit Control**:
    - **Profile Branding**: View and update display names, about bios, social links, and NSFW tags.

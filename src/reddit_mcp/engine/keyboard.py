@@ -1,22 +1,28 @@
 """
-Human-mimetic keyboard controller using Weibull distributed typing cadences.
-Simulates natural pauses after punctuation, spaces, and keystroke variations.
+Human-mimetic keyboard controller powered by behavioral_playwright.
+Uses Dhakal keyboard kinematics, Euclidean key distance modulation,
+and Weibull latency distributions from LinguisticKeystrokeDynamicsEngine.
 """
 
+from __future__ import annotations
 import asyncio
 import random
+from typing import Optional
 from playwright.async_api import Locator
+
+from behavioral_playwright.powerplay.keystrokes import LinguisticKeystrokeDynamicsEngine
 
 
 class KeyboardController:
-    """Human-mimetic keyboard typing simulator."""
+    """Human-mimetic keyboard controller delegating to behavioral_playwright."""
 
-    @staticmethod
-    def _sample_weibull_delay(min_ms: float = 35.0, max_ms: float = 120.0) -> float:
-        """Samples a keystroke latency using Weibull distribution for realistic typing dynamics."""
-        # Shape parameter k ~ 2.0 (Rayleigh-like distribution), scale parameter lambda ~ 50ms
-        delay = random.weibullvariate(50.0, 2.0)
-        return max(min_ms, min(delay, max_ms)) / 1000.0
+    _engine: Optional[LinguisticKeystrokeDynamicsEngine] = None
+
+    @classmethod
+    def _get_engine(cls) -> LinguisticKeystrokeDynamicsEngine:
+        if cls._engine is None:
+            cls._engine = LinguisticKeystrokeDynamicsEngine()
+        return cls._engine
 
     @classmethod
     async def human_type(
@@ -26,8 +32,12 @@ class KeyboardController:
         min_ms: float = 25.0,
         max_ms: float = 85.0
     ) -> None:
-        """Types text with natural human cadence, supporting newlines and burst typing for long inputs."""
+        """
+        Types text with authentic human cadence using behavioral_playwright's
+        LinguisticKeystrokeDynamicsEngine, supporting newlines and burst typing for long inputs.
+        """
         await locator.focus()
+        engine = cls._get_engine()
 
         # For long inputs (> 150 chars), use human burst typing to prevent MCP client timeout
         if len(text) > 150:
@@ -44,8 +54,13 @@ class KeyboardController:
                         await asyncio.sleep(random.uniform(0.02, 0.05))
 
                     if word:
-                        chunk_delay = cls._sample_weibull_delay(min_ms=10.0, max_ms=35.0)
-                        await locator.press_sequentially(word, delay=int(chunk_delay * 1000))
+                        seq = engine.generate_typing_sequence(word)
+                        for ev in seq:
+                            if ev.get("event") == "keydown":
+                                key = ev.get("key", "")
+                                await locator.press_sequentially(key, delay=0)
+                                # Micro flight delay clamped between 8ms and 35ms
+                                await asyncio.sleep(random.uniform(0.008, 0.035))
 
                     if word.endswith((".", "!", "?", ":")):
                         await asyncio.sleep(random.uniform(0.10, 0.22))
@@ -53,26 +68,31 @@ class KeyboardController:
                         await asyncio.sleep(random.uniform(0.05, 0.10))
             return
 
-        # Short text: authentic character-by-character typing
-        for char in text:
-            if char == "\n":
+        # Short / medium text: authentic character-by-character typing with Dhakal kinematics
+        for line_idx, line in enumerate(text.split("\n")):
+            if line_idx > 0:
                 await locator.press("Enter")
                 await asyncio.sleep(random.uniform(0.12, 0.25))
-                continue
 
-            await locator.press_sequentially(char, delay=0)
-            base_delay = cls._sample_weibull_delay(min_ms, max_ms)
+            seq = engine.generate_typing_sequence(line)
+            last_ts = 0
+            for ev in seq:
+                if ev.get("event") == "keydown":
+                    key = ev.get("key", "")
+                    await locator.press_sequentially(key, delay=0)
+                    current_ts = ev.get("timestamp_ms", 0)
+                    delta_ms = current_ts - last_ts if last_ts > 0 else 30
+                    last_ts = current_ts
 
-            # Extended pause after sentence boundaries or commas
-            if char in ".!?:":
-                base_delay += random.uniform(0.12, 0.25)
-            elif char in ",;":
-                base_delay += random.uniform(0.06, 0.12)
-            elif char == " ":
-                base_delay += random.uniform(0.03, 0.07)
+                    # Clamp delay between min_ms and max_ms
+                    flight_sec = min(max_ms / 1000.0, max(min_ms / 1000.0, delta_ms / 1000.0))
 
-            # Fast micro-burst for regular characters (2-5% chance of short hesitation)
-            if random.random() < 0.03:
-                base_delay += random.uniform(0.15, 0.30)
+                    if key in ".!?:":
+                        flight_sec += random.uniform(0.10, 0.20)
+                    elif key in ",;":
+                        flight_sec += random.uniform(0.05, 0.10)
+                    elif key == " ":
+                        flight_sec += random.uniform(0.02, 0.05)
 
-            await asyncio.sleep(base_delay)
+                    await asyncio.sleep(flight_sec)
+

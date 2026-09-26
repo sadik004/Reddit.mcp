@@ -1,38 +1,28 @@
 """
-Human-mimetic mouse trajectory generator using cubic Bézier curves.
-Generates organic acceleration, decelerations, and sub-pixel micro-jitters.
+Human-mimetic mouse trajectory and input controller.
+Powered directly by behavioral_playwright's BiomechanicalTremorEngine and MouseController.
 """
 
-import asyncio
-import math
+from __future__ import annotations
 import random
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
 from playwright.async_api import Page
+
+from behavioral_playwright.automation.mouse import MouseController as BPMouseController
+from behavioral_playwright.powerplay.biomechanics import BiomechanicalTremorEngine
 
 
 class MouseController:
-    """Human-mimetic mouse controller generating organic trajectories."""
+    """Human-mimetic mouse controller delegating to behavioral_playwright."""
 
     _last_position: Optional[Tuple[float, float]] = None
+    _engine: Optional[BiomechanicalTremorEngine] = None
 
-    @staticmethod
-    def _calculate_bezier_point(
-        p0: Tuple[float, float],
-        p1: Tuple[float, float],
-        p2: Tuple[float, float],
-        p3: Tuple[float, float],
-        t: float
-    ) -> Tuple[float, float]:
-        """Calculates a point on a cubic Bézier curve at parameter t in [0, 1]."""
-        u = 1.0 - t
-        tt = t * t
-        uu = u * u
-        uuu = uu * u
-        ttt = tt * t
-
-        x = uuu * p0[0] + 3 * uu * t * p1[0] + 3 * u * tt * p2[0] + ttt * p3[0]
-        y = uuu * p0[1] + 3 * uu * t * p1[1] + 3 * u * tt * p2[1] + ttt * p3[1]
-        return (x, y)
+    @classmethod
+    def _get_engine(cls) -> BiomechanicalTremorEngine:
+        if cls._engine is None:
+            cls._engine = BiomechanicalTremorEngine()
+        return cls._engine
 
     @classmethod
     def generate_human_path(
@@ -43,48 +33,17 @@ class MouseController:
         dest_y: float,
         steps: int = 25
     ) -> List[Tuple[float, float]]:
-        """Generates a natural mouse curve with randomized control points and micro-jitters."""
-        dx = dest_x - start_x
-        dy = dest_y - start_y
-        dist = math.hypot(dx, dy)
-
-        if dist < 5.0:
-            return [(dest_x, dest_y)]
-
-        # Determine perpendicular offset for curve deflection
-        normal_x = -dy / dist
-        normal_y = dx / dist
-        spread = dist * random.uniform(0.15, 0.35)
-        direction = 1 if random.random() < 0.5 else -1
-
-        # Control point 1 (close to start)
-        cp1_x = start_x + dx * random.uniform(0.2, 0.4) + normal_x * spread * direction
-        cp1_y = start_y + dy * random.uniform(0.2, 0.4) + normal_y * spread * direction
-
-        # Control point 2 (close to destination, smaller perturbation)
-        cp2_x = start_x + dx * random.uniform(0.6, 0.8) + normal_x * spread * direction * 0.5
-        cp2_y = start_y + dy * random.uniform(0.6, 0.8) + normal_y * spread * direction * 0.5
-
-        path: List[Tuple[float, float]] = []
-        p0 = (start_x, start_y)
-        p1 = (cp1_x, cp1_y)
-        p2 = (cp2_x, cp2_y)
-        p3 = (dest_x, dest_y)
-
-        for i in range(1, steps + 1):
-            # Sigmoid / Ease-in-out time warp
-            linear_t = i / steps
-            # Smoothstep easing
-            t = linear_t * linear_t * (3.0 - 2.0 * linear_t)
-            bx, by = cls._calculate_bezier_point(p0, p1, p2, p3, t)
-            
-            # Subtle micro-jitter (less jitter near destination)
-            damping = 1.0 - linear_t
-            jitter_x = random.uniform(-0.8, 0.8) * damping
-            jitter_y = random.uniform(-0.8, 0.8) * damping
-            path.append((bx + jitter_x, by + jitter_y))
-
-        return path
+        """
+        Generates a natural biometric mouse curve with Costello saccadic search,
+        quadratic Bezier curvature, and Harris-Wolpert SDN noise via behavioral_playwright.
+        """
+        engine = cls._get_engine()
+        raw_path = engine.generate_bezier_trajectory(
+            start_pos=(float(start_x), float(start_y)),
+            target_pos=(float(dest_x), float(dest_y)),
+            steps=steps
+        )
+        return [(float(pt[0]), float(pt[1])) for pt in raw_path]
 
     @classmethod
     async def human_move_and_click(
@@ -94,29 +53,22 @@ class MouseController:
         target_y: float,
         button: str = "left"
     ) -> None:
-        """Moves mouse across an organic curve to the target and clicks."""
-        # Add random landing offset within clickable area
-        final_x = target_x + random.uniform(-2.0, 2.0)
-        final_y = target_y + random.uniform(-2.0, 2.0)
-
-        # Start from continuous last position if available, otherwise random entry point
-        if cls._last_position is not None:
-            start_x, start_y = cls._last_position
-        else:
-            start_x = random.uniform(100.0, 400.0)
-            start_y = random.uniform(100.0, 300.0)
-
-        path = cls.generate_human_path(
-            start_x=start_x,
-            start_y=start_y,
-            dest_x=final_x,
-            dest_y=final_y,
-            steps=random.randint(18, 28)
+        """
+        Moves mouse across a Costello saccadic curve to target and clicks
+        using behavioral_playwright's MouseController with subpixel synthesis.
+        """
+        start_pos = cls._last_position or (
+            random.uniform(100.0, 400.0),
+            random.uniform(100.0, 300.0)
         )
+        
+        bp_mouse = BPMouseController(
+            page=page,
+            biomechanics=cls._get_engine(),
+            initial_pos=start_pos
+        )
+        
+        # Perform humanized movement and click
+        await bp_mouse.click(selector_or_x=target_x, y=target_y, humanize=True)
+        cls._last_position = (bp_mouse.current_x, bp_mouse.current_y)
 
-        for px, py in path:
-            await page.mouse.move(px, py)
-            await asyncio.sleep(random.uniform(0.005, 0.012))
-
-        await page.mouse.click(final_x, final_y, button=button)
-        cls._last_position = (final_x, final_y)
